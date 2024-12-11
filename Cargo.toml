@@ -1,0 +1,13 @@
+[package]
+name = "hermes"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+serde = { version = "1", features = ["derive"] }
+heapless = "0.8"
+embedded-hal-nb = "1"
+nb = "1"
+defmt = "0.3"
+
+postcard = { version = "1" }
