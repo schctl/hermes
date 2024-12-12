@@ -1,6 +1,6 @@
-use core::fmt::Debug;
+use slab::Slab;
 
-use heapless::Vec;
+use crate::link::{Link, LinkedNode};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, serde::Deserialize, serde::Serialize)]
 pub enum Id {
@@ -8,27 +8,24 @@ pub enum Id {
     Anonymous,
 }
 
-pub trait Link: Debug {
-    fn read(&mut self) -> nb::Result<u8, ()>;
-    fn write(&mut self, byte: u8) -> nb::Result<(), ()>;
-}
-
-#[derive(Debug, Clone)]
 pub struct Node<'l> {
     id: Id,
-    links: Vec<&'l dyn Link, 16>,
+    links: Slab<LinkedNode<'l>>,
 }
 
 impl<'l> Node<'l> {
     pub fn new(id: Id) -> Self {
         Self {
             id,
-            links: Vec::new(),
+            links: Slab::with_capacity(4),
         }
     }
 
-    // TODO: store link by hash and provide "token" through which link can be deleted
-    pub fn add_link(&mut self, link: &'l dyn Link) -> bool {
-        self.links.push(link).is_ok()
+    pub fn add_link(&mut self, link: &'l mut dyn Link) -> usize {
+        self.links.insert(LinkedNode::new(link))
+    }
+
+    pub fn remove_link(&mut self, link: usize) -> LinkedNode<'l> {
+        self.links.remove(link)
     }
 }
