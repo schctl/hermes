@@ -188,6 +188,35 @@ impl<'l> LinkedNode<'l> {
 
         Ok(())
     }
+
+    pub fn read_packet(&mut self) -> ReadFuture<'_, 'l> {
+        ReadFuture { node: self }
+    }
+}
+
+pub struct ReadFuture<'n, 'l> {
+    node: &'n mut LinkedNode<'l>,
+}
+
+impl<'n, 'l> Future for ReadFuture<'n, 'l> {
+    type Output = Packet<'n>;
+
+    fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
+        let this = self.get_mut();
+        let this_ptr: *mut LinkedNode<'l> = this.node;
+        // SAFETY: I don't know what the FUCK is going on here
+        // This should be fine though, since the lifetime of the future should be less than that
+        // of the node. The only reason we can't otherwise bind the output lifetime is trait restrictions.
+        let node: &'n mut LinkedNode<'l> = unsafe { &mut *this_ptr };
+
+        match node._read_packet_intl() {
+            Ok(packet) => Poll::Ready(packet),
+            Err(_) => {
+                cx.waker().wake_by_ref();
+                Poll::Pending
+            }
+        }
+    }
 }
 
 #[cfg(test)]
@@ -245,6 +274,26 @@ mod tests {
                     }
                 }
             }
+        }
+    }
+
+    #[tokio::test]
+    async fn test_link_accumulation_async() {
+        let mut buffer = Vec::<u8, 1024>::new();
+
+        for packet in TEST_PACKETS.into_iter() {
+            buffer
+                .write(&postcard::to_vec_cobs::<Packet, 256>(&packet).unwrap())
+                .unwrap();
+        }
+
+        let mut linked_node = LinkedNode::new(&mut buffer);
+
+        let mut idx = 0;
+
+        for i in 0..3 {
+            let packet = linked_node.read_packet().await;
+            assert_eq!(packet, TEST_PACKETS[i]);
         }
     }
 }
