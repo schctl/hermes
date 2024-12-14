@@ -1,4 +1,8 @@
 use core::cmp::min;
+use core::future::Future;
+use core::mem::transmute;
+use core::pin::Pin;
+use core::task::{Context, Poll};
 
 use heapless::spsc::Queue;
 use heapless::Vec;
@@ -7,11 +11,18 @@ use postcard::accumulator::{CobsAccumulator, FeedResult};
 use crate::packet::Packet;
 
 pub trait Link {
+    /// Read as many bytes as possible into `buf`.
+    ///
+    /// If no bytes are available, `nb::WouldBlock` is returned.
     fn read(&mut self, buf: &mut [u8]) -> nb::Result<usize, ()>;
+
+    /// Write as many bytes as possible from `buf`.
+    ///
+    /// If no bytes are written, `nb::WouldBlock` is returned.
     fn write(&mut self, buf: &[u8]) -> nb::Result<usize, ()>;
 }
 
-/// Link implemented as a stack.
+/// Shared vector-like queue link.
 impl<const T: usize> Link for Vec<u8, T> {
     fn read(&mut self, buf: &mut [u8]) -> nb::Result<usize, ()> {
         let len = self.len();
@@ -23,17 +34,24 @@ impl<const T: usize> Link for Vec<u8, T> {
 
         buf.split_at_mut(bytes).0.copy_from_slice(&self[0..bytes]);
         self.copy_within(bytes..len, 0);
-        unsafe { self.set_len(len - bytes) };
+        self.truncate(len - bytes);
+
         Ok(bytes)
     }
 
     fn write(&mut self, buf: &[u8]) -> nb::Result<usize, ()> {
         let bytes = min(self.capacity() - self.len(), buf.len());
+
+        if bytes == 0 {
+            return Err(nb::Error::WouldBlock);
+        }
+
         self.extend_from_slice(&buf[0..bytes]).unwrap();
         Ok(bytes)
     }
 }
 
+/// spsc queue pair link.
 pub struct ChannelLink<'a, const T: usize, const N: usize> {
     rx: heapless::spsc::Consumer<'a, u8, T>,
     tx: heapless::spsc::Producer<'a, u8, N>,
@@ -98,6 +116,8 @@ impl<'a, const T: usize, const N: usize> Link for ChannelLink<'a, T, N> {
 pub struct LinkedNode<'l> {
     link: &'l mut dyn Link,
     accumulator: CobsAccumulator<256>,
+    look_ahead: [u8; 128],
+    look_ahead_idx: usize,
 }
 
 impl<'l> LinkedNode<'l> {
@@ -105,50 +125,55 @@ impl<'l> LinkedNode<'l> {
         Self {
             link,
             accumulator: CobsAccumulator::new(),
+            look_ahead: [0; 128],
+            look_ahead_idx: 0,
         }
     }
 
-    fn _accumulate<'a>(
-        &mut self,
-        mut f: impl FnMut(Packet),
-        read_buf: &'a [u8],
-    ) -> Option<&'a [u8]> {
-        match self.accumulator.feed_ref(&read_buf) {
-            FeedResult::Consumed => (),
-            FeedResult::DeserError(remaining) => {
-                if !remaining.is_empty() {
-                    return Some(remaining);
+    fn _read_packet_intl<'a>(&'a mut self) -> nb::Result<Packet<'a>, ()> {
+        let ret = self.link.read(&mut self.look_ahead[self.look_ahead_idx..]);
+
+        let bytes = match ret {
+            Ok(bytes) => bytes + self.look_ahead_idx,
+            Err(nb::Error::WouldBlock) => {
+                if self.look_ahead_idx == 0 {
+                    return Err(nb::Error::WouldBlock);
+                } else {
+                    self.look_ahead_idx
                 }
+            }
+            _ => {
+                return Err(nb::Error::Other(()));
+            }
+        };
+
+        match self.accumulator.feed_ref(&self.look_ahead[..bytes]) {
+            FeedResult::Consumed => {
+                self.look_ahead_idx = 0;
+            }
+            FeedResult::DeserError(remaining) => {
+                let rem_idx = bytes - remaining.len();
+                self.look_ahead_idx = remaining.len();
+                self.look_ahead.copy_within(rem_idx.., 0);
+                self.look_ahead.split_at_mut(self.look_ahead_idx).1.fill(0);
             }
             FeedResult::OverFull(remaining) => {
-                if !remaining.is_empty() {
-                    return Some(remaining);
-                }
+                let rem_idx = bytes - remaining.len();
+                self.look_ahead_idx = remaining.len();
+                self.look_ahead.copy_within(rem_idx.., 0);
+                self.look_ahead.split_at_mut(self.look_ahead_idx).1.fill(0);
             }
             FeedResult::Success { data, remaining } => {
-                (f)(data);
+                let rem_idx = bytes - remaining.len();
+                self.look_ahead_idx = remaining.len();
+                self.look_ahead.copy_within(rem_idx.., 0);
+                self.look_ahead.split_at_mut(self.look_ahead_idx).1.fill(0);
 
-                if !remaining.is_empty() {
-                    return Some(remaining);
-                }
+                return Ok(data);
             }
         }
 
-        None
-    }
-
-    /// Try to read and process as many packets as possible.
-    pub fn try_read_packets(&mut self, mut f: impl FnMut(Packet)) {
-        let mut read_buf = [0; 16];
-
-        while let Ok(mut bytes) = self.link.read(&mut read_buf) {
-            while let Some(rem) = self._accumulate(&mut f, &read_buf[..bytes]) {
-                let rem_idx = bytes - rem.len();
-                let bytes_new = rem.len();
-                read_buf.copy_within(rem_idx..bytes, 0);
-                bytes = bytes_new;
-            }
-        }
+        Err(nb::Error::WouldBlock)
     }
 
     /// Fully block and write one packet into the network.
@@ -208,11 +233,18 @@ mod tests {
 
         let mut idx = 0;
 
-        linked_node.try_read_packets(|p| {
-            assert_eq!(p, TEST_PACKETS[idx], "index {idx} failed");
-            idx += 1;
-        });
-
-        assert_eq!(idx, TEST_PACKETS.len());
+        loop {
+            match linked_node._read_packet_intl() {
+                Ok(packet) => {
+                    assert_eq!(packet, TEST_PACKETS[idx]);
+                    idx += 1;
+                }
+                Err(_) => {
+                    if idx == 3 {
+                        break;
+                    }
+                }
+            }
+        }
     }
 }

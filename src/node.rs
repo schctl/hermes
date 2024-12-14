@@ -53,15 +53,17 @@ impl<'l> Node<'l> {
     }
 
     pub fn process_subscriptions(&mut self, mut f: impl FnMut(topic::Message)) {
-        for (_, link) in self.links.iter_mut() {
-            link.try_read_packets(|p| match p.message {
-                packet::Message::Publish(m) => {
-                    if self.subscriptions.contains(&m.id) {
-                        (f)(m);
-                    }
-                }
-            });
-        }
+        //for (_, link) in self.links.iter_mut() {
+        //    while let Ok(packet) = link.read_packet() {
+        //        match packet.message {
+        //            packet::Message::Publish(m) => {
+        //                if self.subscriptions.contains(&m.id) {
+        //                    (f)(m);
+        //                }
+        //            }
+        //        }
+        //    }
+        //}
     }
 }
 
