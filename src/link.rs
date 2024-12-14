@@ -1,3 +1,5 @@
+use core::cmp::min;
+
 use heapless::spsc::Queue;
 use heapless::Vec;
 use postcard::accumulator::{CobsAccumulator, FeedResult};
@@ -5,18 +7,30 @@ use postcard::accumulator::{CobsAccumulator, FeedResult};
 use crate::packet::Packet;
 
 pub trait Link {
-    fn read(&mut self) -> nb::Result<u8, ()>;
-    fn write(&mut self, byte: u8) -> nb::Result<(), u8>;
+    fn read(&mut self, buf: &mut [u8]) -> nb::Result<usize, ()>;
+    fn write(&mut self, buf: &[u8]) -> nb::Result<usize, ()>;
 }
 
 /// Link implemented as a stack.
 impl<const T: usize> Link for Vec<u8, T> {
-    fn read(&mut self) -> nb::Result<u8, ()> {
-        self.pop().ok_or(nb::Error::Other(()))
+    fn read(&mut self, buf: &mut [u8]) -> nb::Result<usize, ()> {
+        let len = self.len();
+        let bytes = min(len, buf.len());
+
+        if bytes == 0 {
+            return Err(nb::Error::WouldBlock);
+        }
+
+        buf.split_at_mut(bytes).0.copy_from_slice(&self[0..bytes]);
+        self.copy_within(bytes..len, 0);
+        unsafe { self.set_len(len - bytes) };
+        Ok(bytes)
     }
 
-    fn write(&mut self, byte: u8) -> nb::Result<(), u8> {
-        self.push(byte).map_err(nb::Error::Other)
+    fn write(&mut self, buf: &[u8]) -> nb::Result<usize, ()> {
+        let bytes = min(self.capacity() - self.len(), buf.len());
+        self.extend_from_slice(&buf[0..bytes]).unwrap();
+        Ok(bytes)
     }
 }
 
@@ -47,19 +61,43 @@ impl<'a, const T: usize, const N: usize> ChannelLink<'a, T, N> {
 }
 
 impl<'a, const T: usize, const N: usize> Link for ChannelLink<'a, T, N> {
-    fn read(&mut self) -> nb::Result<u8, ()> {
-        self.rx.dequeue().ok_or(nb::Error::WouldBlock)
+    fn read(&mut self, buf: &mut [u8]) -> nb::Result<usize, ()> {
+        if self.rx.peek().is_none() {
+            return Err(nb::Error::WouldBlock);
+        }
+
+        let mut written = 0;
+
+        while written < buf.len() {
+            if let Some(byte) = self.rx.dequeue() {
+                buf[written] = byte;
+                written += 1;
+            } else {
+                break;
+            }
+        }
+
+        Ok(written)
     }
 
-    fn write(&mut self, byte: u8) -> nb::Result<(), u8> {
-        self.tx.enqueue(byte).map_err(|e| nb::Error::Other(e))
+    fn write(&mut self, buf: &[u8]) -> nb::Result<usize, ()> {
+        if !self.tx.ready() {
+            return Err(nb::Error::WouldBlock);
+        }
+
+        for (n, byte) in buf.into_iter().enumerate() {
+            if let Err(_) = self.tx.enqueue(*byte) {
+                return Ok(n);
+            }
+        }
+
+        Ok(buf.len())
     }
 }
 
 pub struct LinkedNode<'l> {
     link: &'l mut dyn Link,
     accumulator: CobsAccumulator<256>,
-    read_buf: Vec<u8, 16>,
 }
 
 impl<'l> LinkedNode<'l> {
@@ -67,54 +105,63 @@ impl<'l> LinkedNode<'l> {
         Self {
             link,
             accumulator: CobsAccumulator::new(),
-            read_buf: Vec::new(),
         }
     }
 
-    fn _accumulate(&mut self, mut f: impl FnMut(Packet)) {
-        let mut remaining = Vec::<u8, 16>::new();
-
-        match self.accumulator.feed_ref(&self.read_buf) {
+    fn _accumulate<'a>(
+        &mut self,
+        mut f: impl FnMut(Packet),
+        read_buf: &'a [u8],
+    ) -> Option<&'a [u8]> {
+        match self.accumulator.feed_ref(&read_buf) {
             FeedResult::Consumed => (),
-            FeedResult::DeserError(rem) => {
-                remaining.extend_from_slice(rem).unwrap();
-                // error!("unable to process byte sequence")
+            FeedResult::DeserError(remaining) => {
+                if !remaining.is_empty() {
+                    return Some(remaining);
+                }
             }
-            FeedResult::OverFull(rem) => {
-                remaining.extend_from_slice(rem).unwrap();
-                // error!("accumulator buffer overflow")
+            FeedResult::OverFull(remaining) => {
+                if !remaining.is_empty() {
+                    return Some(remaining);
+                }
             }
-            FeedResult::Success {
-                data,
-                remaining: rem,
-            } => {
-                remaining.extend_from_slice(rem).unwrap();
+            FeedResult::Success { data, remaining } => {
                 (f)(data);
+
+                if !remaining.is_empty() {
+                    return Some(remaining);
+                }
             }
         }
 
-        self.read_buf = remaining.clone();
+        None
     }
 
-    // TODO: make this nb
-    pub fn read_packet(&mut self, mut f: impl FnMut(Packet)) {
-        while let Ok(byte) = self.link.read() {
-            if self.read_buf.is_full() {
-                self._accumulate(&mut f);
+    /// Try to read and process as many packets as possible.
+    pub fn try_read_packets(&mut self, mut f: impl FnMut(Packet)) {
+        let mut read_buf = [0; 16];
+
+        while let Ok(mut bytes) = self.link.read(&mut read_buf) {
+            while let Some(rem) = self._accumulate(&mut f, &read_buf[..bytes]) {
+                let rem_idx = bytes - rem.len();
+                let bytes_new = rem.len();
+                read_buf.copy_within(rem_idx..bytes, 0);
+                bytes = bytes_new;
             }
-
-            self.read_buf.push(byte).unwrap();
         }
-
-        self._accumulate(&mut f);
     }
 
-    pub fn write_packet(&mut self, packet: &Packet) {
+    /// Fully block and write one packet into the network.
+    pub fn write_packet(&mut self, packet: &Packet) -> nb::Result<(), ()> {
         let bytes = postcard::to_vec_cobs::<Packet, 256>(&packet).unwrap();
 
-        for byte in bytes {
-            self.link.write(byte).unwrap();
+        let mut written = 0;
+
+        while written < bytes.len() {
+            written += self.link.write(&bytes)?;
         }
+
+        Ok(())
     }
 }
 
@@ -130,18 +177,19 @@ mod tests {
     fn test_channel_link() {
         // FIXME: channel driver queue size is kind of funky
 
-        let mut buffer_1 = Queue::<u8, 16>::new();
-        let mut buffer_2 = Queue::<u8, 16>::new();
+        let mut buffer_1 = Queue::<u8, 129>::new();
+        let mut buffer_2 = Queue::<u8, 129>::new();
 
         let (mut link_1, mut link_2) = ChannelLink::new(&mut buffer_1, &mut buffer_2);
 
-        for byte in 0..12 {
-            link_1.write(byte).unwrap();
-        }
+        let written = link_1.write(&[2; 128]).unwrap();
 
-        for byte in 0..12 {
-            assert_eq!(link_2.read().unwrap(), byte);
-        }
+        assert_eq!(written, 128);
+
+        let mut buf = [0; 128];
+        link_2.read(&mut buf).unwrap();
+
+        assert_eq!(buf, [2; 128]);
     }
 
     /// Check that the internal accumulator can correctly handle receiving a stream of bytes
@@ -151,16 +199,16 @@ mod tests {
         let mut buffer = Vec::<u8, 1024>::new();
 
         for packet in TEST_PACKETS.into_iter() {
-            buffer.extend(postcard::to_vec_cobs::<Packet, 256>(&packet).unwrap());
+            buffer
+                .write(&postcard::to_vec_cobs::<Packet, 256>(&packet).unwrap())
+                .unwrap();
         }
-
-        buffer.reverse();
 
         let mut linked_node = LinkedNode::new(&mut buffer);
 
         let mut idx = 0;
 
-        linked_node.read_packet(|p| {
+        linked_node.try_read_packets(|p| {
             assert_eq!(p, TEST_PACKETS[idx], "index {idx} failed");
             idx += 1;
         });

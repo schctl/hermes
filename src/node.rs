@@ -54,7 +54,7 @@ impl<'l> Node<'l> {
 
     pub fn process_subscriptions(&mut self, mut f: impl FnMut(topic::Message)) {
         for (_, link) in self.links.iter_mut() {
-            link.read_packet(|p| match p.message {
+            link.try_read_packets(|p| match p.message {
                 packet::Message::Publish(m) => {
                     if self.subscriptions.contains(&m.id) {
                         (f)(m);
