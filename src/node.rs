@@ -5,7 +5,7 @@ use core::task::{Context, Poll};
 use fastrand::Rng;
 use heapless::{FnvIndexSet, Vec};
 
-use crate::link::{Link, LinkedNode, WriteFuture};
+use crate::link::{Link, LinkedNode, ReadFuture, WriteFuture};
 use crate::packet::{self, Packet};
 use crate::topic;
 
@@ -45,14 +45,13 @@ impl<'l, const N: usize> Node<'l, N> {
 
     pub fn publish<'n>(
         &'n mut self,
-        id: topic::Id,
-        data: &'n [u8],
+        message: topic::Message<'n>
     ) -> postcard::Result<PubFuture<'n, 'l, N>> {
-        debug_assert!(data.len() <= 256); // FIXME: arbitrary limit
+        debug_assert!(message.data.len() <= 256); // FIXME: arbitrary limit
 
         let packet = Packet {
             origin: self.id,
-            message: packet::Message::Publish(topic::Message { id, data }),
+            message: packet::Message::Publish(message),
         };
 
         let collect_futures = self
@@ -67,8 +66,18 @@ impl<'l, const N: usize> Node<'l, N> {
         })
     }
 
-    pub async fn wait_subscription(&self) -> topic::Message {
-        todo!()
+    pub fn wait_subscription<'n>(&'n mut self) -> WaitSubFuture<'n, 'l, N> {
+        let collect_futures = self
+            .links
+            .iter_mut()
+            .map(|link| link.read_packet())
+            .collect::<Vec<ReadFuture, N>>();
+
+        WaitSubFuture {
+            subscriptions: &self.subscriptions,
+            futures: unsafe { collect_futures.into_array().unwrap_unchecked() },
+            rng: Rng::with_seed(N as u64),
+        }
     }
 }
 
@@ -101,6 +110,39 @@ impl<'n, 'l, const N: usize> Future for PubFuture<'n, 'l, N> {
         }
 
         done.map_or(Poll::Pending, Poll::Ready)
+    }
+}
+
+pub struct WaitSubFuture<'n, 'l, const N: usize> {
+    subscriptions: &'n FnvIndexSet<topic::Id, 16>,
+    futures: [ReadFuture<'n, 'l>; N],
+    rng: Rng,
+}
+
+impl<'n, 'l, const N: usize> Future for WaitSubFuture<'n, 'l, N> {
+    type Output = topic::Message<'n>;
+
+    #[allow(irrefutable_let_patterns)]
+    fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
+        let this = self.get_mut();
+
+        let mut indices = indices::<N>();
+        this.rng.shuffle(&mut indices);
+
+        for idx in indices.into_iter() {
+            if let Poll::Ready(packet) = Pin::new(&mut this.futures[idx]).poll(cx) {
+                // FIXME: this might not be future proof. when we add new packet handlers, we'll need
+                // to be able to handle them here generically.
+                if let packet::Message::Publish(message) = packet.message {
+                    if this.subscriptions.contains(&message.id) {
+                        return Poll::Ready(message);
+                    }
+                    // some other processing
+                }
+            }
+        }
+
+        Poll::Pending
     }
 }
 
@@ -138,19 +180,43 @@ mod tests {
         let (mut link_1, mut link_2) = ChannelLink::new(&mut buffer_1, &mut buffer_2);
 
         let mut node_1 = Node::new_with_links(Id::Id(5), [&mut link_1]);
-
         let mut node_2 = Node::new_with_links(Id::Id(6), [&mut link_2]);
 
         node_2.subscribe(2);
         node_2.subscribe(3);
 
         for m in MESSAGES {
-            node_1.publish(m.id, m.data).unwrap().await;
+            node_1.publish(m).unwrap().await;
         }
 
-        // for idx in 0..3 {
-        //     let message = node_2.process_subscriptions().await;
-        //     assert_eq!(message, MESSAGES[idx]);
-        // }
+        for idx in 0..3 {
+            let message = node_2.wait_subscription().await;
+            assert_eq!(message, MESSAGES[idx]);
+        }
+    }
+
+    #[tokio::test]
+    async fn test_node_pub_sub_multicon_async() {
+        let mut buffer_1 = Queue::<u8, 128>::new();
+        let mut buffer_2 = Queue::<u8, 128>::new();
+
+        let (mut link_1, mut link_2) = ChannelLink::new(&mut buffer_1, &mut buffer_2);
+
+        let mut buffer_3 = Queue::<u8, 128>::new();
+        let mut buffer_4 = Queue::<u8, 128>::new();
+
+        let (mut link_3, mut link_4) = ChannelLink::new(&mut buffer_3, &mut buffer_4);
+
+        let mut node_1 = Node::new_with_links(Id::Id(5), [&mut link_1]);
+        let mut node_2 = Node::new_with_links(Id::Id(6), [&mut link_3]);
+        let mut node_3 = Node::new_with_links(Id::Id(7), [&mut link_2, &mut link_4]);
+
+        node_3.subscribe(2);
+
+        node_1.publish(MESSAGES[1]).unwrap().await;
+        assert_eq!(node_3.wait_subscription().await, MESSAGES[1]);
+
+        node_2.publish(MESSAGES[3]).unwrap().await;
+        assert_eq!(node_3.wait_subscription().await, MESSAGES[3]);
     }
 }
