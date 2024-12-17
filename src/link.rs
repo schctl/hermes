@@ -177,23 +177,28 @@ impl<'l> LinkedNode<'l> {
     }
 
     /// Fully block and write one packet into the network.
-    pub fn write_packet(&mut self, packet: &Packet) -> nb::Result<(), ()> {
-        let bytes = postcard::to_vec_cobs::<Packet, 256>(&packet).unwrap();
+    pub fn write_packet<'a>(
+        &'a mut self,
+        packet: &Packet,
+    ) -> postcard::Result<WriteFuture<'a, 'l>> {
+        let buffer = postcard::to_vec_cobs::<Packet, 256>(&packet)?;
 
-        let mut written = 0;
-
-        while written < bytes.len() {
-            written += self.link.write(&bytes)?;
-        }
-
-        Ok(())
+        Ok(WriteFuture {
+            node: self,
+            buffer,
+            written: 0,
+        })
     }
 
+    /// Fully block and read one packet into the netwwork.
     pub fn read_packet(&mut self) -> ReadFuture<'_, 'l> {
         ReadFuture { node: self }
     }
 }
 
+/// Future which attemps to read incoming packets.
+///
+/// This future is safely cancellable.
 pub struct ReadFuture<'n, 'l> {
     node: &'n mut LinkedNode<'l>,
 }
@@ -201,7 +206,7 @@ pub struct ReadFuture<'n, 'l> {
 impl<'n, 'l> Future for ReadFuture<'n, 'l> {
     type Output = Packet<'n>;
 
-    fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
+    fn poll(self: Pin<&mut Self>, cx: &mut Context) -> Poll<Self::Output> {
         let this = self.get_mut();
         let this_ptr: *mut LinkedNode<'l> = this.node;
         // SAFETY: I don't know what the FUCK is going on here
@@ -215,6 +220,43 @@ impl<'n, 'l> Future for ReadFuture<'n, 'l> {
                 cx.waker().wake_by_ref();
                 Poll::Pending
             }
+        }
+    }
+}
+
+/// Write a serialized packet into the network.
+///
+/// This future is NOT safely cancellable.
+pub struct WriteFuture<'n, 'l> {
+    node: &'n mut LinkedNode<'l>,
+    buffer: Vec<u8, 256>,
+    written: usize,
+}
+
+impl<'n, 'l> Future for WriteFuture<'n, 'l> {
+    type Output = bool;
+
+    fn poll(self: Pin<&mut Self>, cx: &mut Context) -> Poll<Self::Output> {
+        let this = self.get_mut();
+
+        if this.written == this.buffer.len() {
+            return Poll::Ready(true);
+        }
+
+        match this.node.link.write(&this.buffer[this.written..]) {
+            Ok(bytes) => {
+                if bytes < this.buffer.len() {
+                    this.written += bytes;
+                    Poll::Pending
+                } else {
+                    Poll::Ready(true)
+                }
+            }
+            Err(nb::Error::WouldBlock) => {
+                cx.waker().wake_by_ref();
+                Poll::Pending
+            }
+            Err(_) => Poll::Ready(false),
         }
     }
 }

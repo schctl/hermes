@@ -36,13 +36,15 @@ intra-vehicular communication, while also being robust and easy to use.
 
 ### Comparison of different protocols / library implementations
 
-| Name                        | IP independent       | Decentralized        | Complexity     | Resources      |
-| --------------------------- | -------------------- | -------------------- | -------------- | -------------- |
-| MQTT                        | :x:                  | :x:                  | :white_circle: | :white_circle: |
-| micro-ROS (_MicroXRCE-DDS_) | :white_check_mark:   | :x:                  | :white_circle: | :white_circle: |
-| RMW                         | :white_check_mark:   | :white_check_mark:   | :x:            | :x:            |
-| UAVCAN                      | :white_check_mark:++ | :white_check_mark:++ | :white_circle: | :x:            |
-| eProsima FastRTPS           | :x:                  | :white_check_mark:   | :x:++          | :x:            |
+| Name                        | IP independent       | Decentralized        | Complexity     | Resources      | Mixed Transport |
+| --------------------------- | -------------------- | -------------------- | -------------- | -------------- | ----------------|
+| MQTT                        | :x:                  | :x:                  | :white_circle: | :white_circle: | :x:             |
+| micro-ROS (_MicroXRCE-DDS_) | :white_check_mark:   | :x:                  | :white_circle: | :white_circle: | :x:             |
+| RMW                         | :white_check_mark:   | :white_check_mark:   | :x:            | :x:            | *               |
+| UAVCAN                      | :white_check_mark:   | :white_check_mark:   | :white_circle: | :x:            | :x:             |
+| eProsima FastRTPS           | :x:                  | :white_check_mark:   | :x:++          | :x:            | :x:             |
+
+_*Implementation specific._
 
 ## Design
 
