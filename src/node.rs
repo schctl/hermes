@@ -45,7 +45,7 @@ impl<'l, const N: usize> Node<'l, N> {
 
     pub fn publish<'n>(
         &'n mut self,
-        message: topic::Message<'n>
+        message: topic::Message<'n>,
     ) -> postcard::Result<PubFuture<'n, 'l, N>> {
         debug_assert!(message.data.len() <= 256); // FIXME: arbitrary limit
 
@@ -102,7 +102,7 @@ impl<'n, 'l, const N: usize> Future for PubFuture<'n, 'l, N> {
         let mut indices = indices::<N>();
         this.rng.shuffle(&mut indices);
 
-        for idx in indices.into_iter() {
+        for idx in indices {
             if let Poll::Ready(success) = Pin::new(&mut this.futures[idx]).poll(cx) {
                 done = done.map(|s| s && success);
                 break;
@@ -129,7 +129,7 @@ impl<'n, 'l, const N: usize> Future for WaitSubFuture<'n, 'l, N> {
         let mut indices = indices::<N>();
         this.rng.shuffle(&mut indices);
 
-        for idx in indices.into_iter() {
+        for idx in indices {
             if let Poll::Ready(packet) = Pin::new(&mut this.futures[idx]).poll(cx) {
                 // FIXME: this might not be future proof. when we add new packet handlers, we'll need
                 // to be able to handle them here generically.

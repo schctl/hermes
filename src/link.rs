@@ -1,6 +1,5 @@
 use core::cmp::min;
 use core::future::Future;
-use core::mem::transmute;
 use core::pin::Pin;
 use core::task::{Context, Poll};
 
@@ -103,8 +102,8 @@ impl<'a, const T: usize, const N: usize> Link for ChannelLink<'a, T, N> {
             return Err(nb::Error::WouldBlock);
         }
 
-        for (n, byte) in buf.into_iter().enumerate() {
-            if let Err(_) = self.tx.enqueue(*byte) {
+        for (n, byte) in buf.iter().enumerate() {
+            if self.tx.enqueue(*byte).is_err() {
                 return Ok(n);
             }
         }
@@ -130,7 +129,7 @@ impl<'l> LinkedNode<'l> {
         }
     }
 
-    fn _read_packet_intl<'a>(&'a mut self) -> nb::Result<Packet<'a>, ()> {
+    fn _read_packet_intl(&mut self) -> nb::Result<Packet, ()> {
         let ret = self.link.read(&mut self.look_ahead[self.look_ahead_idx..]);
 
         let bytes = match ret {
@@ -138,9 +137,9 @@ impl<'l> LinkedNode<'l> {
             Err(nb::Error::WouldBlock) => {
                 if self.look_ahead_idx == 0 {
                     return Err(nb::Error::WouldBlock);
-                } else {
-                    self.look_ahead_idx
                 }
+
+                self.look_ahead_idx
             }
             _ => {
                 return Err(nb::Error::Other(()));
@@ -181,7 +180,7 @@ impl<'l> LinkedNode<'l> {
         &'a mut self,
         packet: &Packet,
     ) -> postcard::Result<WriteFuture<'a, 'l>> {
-        let buffer = postcard::to_vec_cobs::<Packet, 256>(&packet)?;
+        let buffer = postcard::to_vec_cobs::<Packet, 256>(packet)?;
 
         Ok(WriteFuture {
             node: self,
@@ -330,8 +329,6 @@ mod tests {
         }
 
         let mut linked_node = LinkedNode::new(&mut buffer);
-
-        let mut idx = 0;
 
         for i in 0..3 {
             let packet = linked_node.read_packet().await;
