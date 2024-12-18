@@ -189,6 +189,10 @@ impl<'l> LinkedNode<'l> {
         })
     }
 
+    pub fn dummy_write(&mut self) -> postcard::Result<WriteFuture<'_, 'l>> {
+        Ok(WriteFuture::dummy(self))
+    }
+
     /// Fully block and read one packet into the netwwork.
     pub fn read_packet(&mut self) -> ReadFuture<'_, 'l> {
         ReadFuture { node: self }
@@ -230,6 +234,16 @@ pub struct WriteFuture<'n, 'l> {
     node: &'n mut LinkedNode<'l>,
     buffer: Vec<u8, 256>,
     written: usize,
+}
+
+impl<'n, 'l> WriteFuture<'n, 'l> {
+    pub(crate) fn dummy(node: &'n mut LinkedNode<'l>) -> Self {
+        Self {
+            node,
+            buffer: Vec::new(),
+            written: 0,
+        }
+    }
 }
 
 impl<'n, 'l> Future for WriteFuture<'n, 'l> {
