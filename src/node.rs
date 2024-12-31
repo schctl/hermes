@@ -230,9 +230,9 @@ mod tests {
             node_1.publish(m).unwrap().await;
         }
 
-        for idx in 0..3 {
+        for m in MESSAGES {
             let message = node_2.wait_packet().await;
-            assert_eq!(message.1.message, packet::Message::Publish(MESSAGES[idx]));
+            assert_eq!(message.1.message, packet::Message::Publish(m));
         }
     }
 
