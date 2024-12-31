@@ -15,7 +15,7 @@ fastrand = { version = "2.3", default-features = false }
 futures-lite = "2"
 
 [dev-dependencies]
-tokio = { version = "1", features = ["rt", "macros", "sync"] }
+tokio = { version = "1", features = ["full"] }
 
 [profile.dev]
 opt-level = 1

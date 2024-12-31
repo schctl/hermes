@@ -16,17 +16,34 @@ pub enum Id {
     Anonymous,
 }
 
+impl From<u16> for Id {
+    fn from(id: u16) -> Self {
+        Self::Id(id)
+    }
+}
+
+impl From<Option<u16>> for Id {
+    fn from(id: Option<u16>) -> Self {
+        match id {
+            Some(id) => Self::Id(id),
+            None => Self::Anonymous,
+        }
+    }
+}
+
 pub struct Node<'l, const N: usize> {
     id: Id,
     links: [LinkedNode<'l>; N],
 }
 
 impl<'l, const N: usize> Node<'l, N> {
-    pub fn new(id: Id, links: [LinkedNode<'l>; N]) -> Self {
+    pub fn new(id: impl Into<Id>, links: [LinkedNode<'l>; N]) -> Self {
+        let id = id.into();
+
         Self { id, links }
     }
 
-    pub fn new_with_links(id: Id, links: [&'l mut dyn Link; N]) -> Self {
+    pub fn new_with_links(id: impl Into<Id>, links: [&'l mut dyn Link; N]) -> Self {
         Self::new(id, links.map(LinkedNode::new))
     }
 
@@ -78,8 +95,11 @@ impl<'l, const N: usize> Node<'l, N> {
         }
     }
 
-    pub async fn run<T>(&mut self, mut callback: impl FnMut(topic::Message) -> T, cancel: AtomicBool)
-    where
+    pub async fn run<T>(
+        &mut self,
+        mut callback: impl FnMut(topic::Message) -> T,
+        cancel: AtomicBool,
+    ) where
         T: Future<Output = ()>,
     {
         loop {
@@ -93,7 +113,7 @@ impl<'l, const N: usize> Node<'l, N> {
                     let data_clone = Vec::<_, 256>::from_slice(message.data).unwrap();
                     let message = topic::Message {
                         id: message.id,
-                        data: &data_clone
+                        data: &data_clone,
                     };
 
                     // FIXME: should this be zip?
@@ -103,7 +123,8 @@ impl<'l, const N: usize> Node<'l, N> {
                     futures_lite::future::zip(
                         (callback)(message),
                         self.publish_except(message, &[idx]).unwrap(),
-                    ).await;
+                    )
+                    .await;
                 }
             }
         }
@@ -172,7 +193,6 @@ impl<'n, 'l, const N: usize> Future for WaitPacketFuture<'n, 'l, N> {
 #[cfg(test)]
 mod tests {
     use heapless::spsc::Queue;
-    use tokio::sync::Arc;
 
     use super::*;
     use crate::link::ChannelLink;
