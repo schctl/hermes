@@ -77,7 +77,7 @@ impl<'a, const T: usize, const N: usize> ChannelLink<'a, T, N> {
     }
 }
 
-impl<'a, const T: usize, const N: usize> Link for ChannelLink<'a, T, N> {
+impl<const T: usize, const N: usize> Link for ChannelLink<'_, T, N> {
     fn read(&mut self, buf: &mut [u8]) -> nb::Result<usize, ()> {
         if self.rx.peek().is_none() {
             return Err(nb::Error::WouldBlock);
@@ -246,7 +246,7 @@ impl<'n, 'l> WriteFuture<'n, 'l> {
     }
 }
 
-impl<'n, 'l> Future for WriteFuture<'n, 'l> {
+impl Future for WriteFuture<'_, '_> {
     type Output = bool;
 
     fn poll(self: Pin<&mut Self>, cx: &mut Context) -> Poll<Self::Output> {
@@ -346,9 +346,9 @@ mod tests {
 
         let mut linked_node = LinkedNode::new(&mut buffer);
 
-        for i in 0..3 {
+        for test_packet in TEST_PACKETS {
             let packet = linked_node.read_packet().await;
-            assert_eq!(packet, TEST_PACKETS[i]);
+            assert_eq!(packet, test_packet);
         }
     }
 }

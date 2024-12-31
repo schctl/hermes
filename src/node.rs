@@ -141,7 +141,7 @@ pub struct PubFuture<'n, 'l, const N: usize> {
     rng: Rng,
 }
 
-impl<'n, 'l, const N: usize> Future for PubFuture<'n, 'l, N> {
+impl<const N: usize> Future for PubFuture<'_, '_, N> {
     type Output = bool;
 
     fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
@@ -168,7 +168,7 @@ pub struct WaitPacketFuture<'n, 'l, const N: usize> {
     rng: Rng,
 }
 
-impl<'n, 'l, const N: usize> Future for WaitPacketFuture<'n, 'l, N> {
+impl<'n, const N: usize> Future for WaitPacketFuture<'n, '_, N> {
     type Output = (usize, Packet<'n>);
 
     #[allow(irrefutable_let_patterns)]
