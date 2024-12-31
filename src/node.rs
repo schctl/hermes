@@ -1,5 +1,6 @@
 use core::future::Future;
 use core::pin::Pin;
+use core::sync::atomic::{AtomicBool, Ordering};
 use core::task::{Context, Poll};
 
 use fastrand::Rng;
@@ -17,7 +18,6 @@ pub enum Id {
 
 pub struct Node<'l, const N: usize> {
     id: Id,
-    // FIXME: all this can probably be more memory efficient
     links: [LinkedNode<'l>; N],
 }
 
@@ -78,19 +78,32 @@ impl<'l, const N: usize> Node<'l, N> {
         }
     }
 
-    pub async fn run<T>(&mut self, mut callback: impl FnMut(topic::Message) -> T)
+    pub async fn run<T>(&mut self, mut callback: impl FnMut(topic::Message) -> T, cancel: AtomicBool)
     where
-        T: Future<Output = bool>,
+        T: Future<Output = ()>,
     {
         loop {
+            if cancel.load(Ordering::Relaxed) {
+                return;
+            }
+
             let (idx, packet) = self.wait_packet().await;
             match packet.message {
                 packet::Message::Publish(message) => {
-                    // futures_lite::future::race(
-                    //     (callback)(message),
-                    //     self.publish_except(message, &[idx]).unwrap(),
-                    // );
-                    (callback)(message).await;
+                    let data_clone = Vec::<_, 256>::from_slice(message.data).unwrap();
+                    let message = topic::Message {
+                        id: message.id,
+                        data: &data_clone
+                    };
+
+                    // FIXME: should this be zip?
+                    // how to handle cases where publish_except hangs?
+                    // in the future when we have QoS contracts, we'd ideally want to be able to
+                    // cancel publish_except if it takes too long and carry on with processing packets.
+                    futures_lite::future::zip(
+                        (callback)(message),
+                        self.publish_except(message, &[idx]).unwrap(),
+                    ).await;
                 }
             }
         }
@@ -159,6 +172,7 @@ impl<'n, 'l, const N: usize> Future for WaitPacketFuture<'n, 'l, N> {
 #[cfg(test)]
 mod tests {
     use heapless::spsc::Queue;
+    use tokio::sync::Arc;
 
     use super::*;
     use crate::link::ChannelLink;

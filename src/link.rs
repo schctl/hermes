@@ -9,7 +9,7 @@ use postcard::accumulator::{CobsAccumulator, FeedResult};
 
 use crate::packet::Packet;
 
-pub trait Link {
+pub trait Link: Send {
     /// Read as many bytes as possible into `buf`.
     ///
     /// If no bytes are available, `nb::WouldBlock` is returned.
@@ -250,6 +250,10 @@ impl<'n, 'l> Future for WriteFuture<'n, 'l> {
     type Output = bool;
 
     fn poll(self: Pin<&mut Self>, cx: &mut Context) -> Poll<Self::Output> {
+        // FIXME: cancelling this future should somehow indicate clearly to the network that the
+        // transmitted packet is incomplete by writing the sentinel byte. otherwise the adjacent
+        // packet will also be invalidated and dropped.
+
         let this = self.get_mut();
 
         if this.written == this.buffer.len() {
@@ -284,8 +288,6 @@ mod tests {
     /// Test that channel link can correctly send and receive bytes.
     #[test]
     fn test_channel_link() {
-        // FIXME: channel driver queue size is kind of funky
-
         let mut buffer_1 = Queue::<u8, 129>::new();
         let mut buffer_2 = Queue::<u8, 129>::new();
 

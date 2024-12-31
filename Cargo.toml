@@ -12,8 +12,10 @@ defmt = "0.3"
 postcard = { version = "1" }
 fastrand = { version = "2.3", default-features = false }
 
+futures-lite = "2"
+
 [dev-dependencies]
-tokio = { version = "1", features = ["rt", "macros"] }
+tokio = { version = "1", features = ["rt", "macros", "sync"] }
 
 [profile.dev]
 opt-level = 1
