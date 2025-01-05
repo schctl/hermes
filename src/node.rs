@@ -3,6 +3,7 @@ use core::pin::Pin;
 use core::sync::atomic::{AtomicBool, Ordering};
 use core::task::{Context, Poll};
 
+use embassy_futures::join::JoinArray;
 use fastrand::Rng;
 use heapless::Vec;
 
@@ -47,7 +48,7 @@ impl<'l, const N: usize> Node<'l, N> {
         Self::new(id, links.map(LinkedNode::new))
     }
 
-    pub fn publish(&mut self, message: topic::Message) -> postcard::Result<PubFuture<'_, 'l, N>> {
+    pub fn publish(&mut self, message: topic::Message) -> postcard::Result<JoinArray<WriteFuture<'_, 'l>, N>> {
         self.publish_except(message, &[])
     }
 
@@ -55,7 +56,7 @@ impl<'l, const N: usize> Node<'l, N> {
         &mut self,
         message: topic::Message,
         except: &[usize],
-    ) -> postcard::Result<PubFuture<'_, 'l, N>> {
+    ) -> postcard::Result<JoinArray<WriteFuture<'_, 'l>, N>> {
         debug_assert!(message.data.len() <= 256); // FIXME: arbitrary limit
 
         let packet = Packet {
@@ -76,10 +77,7 @@ impl<'l, const N: usize> Node<'l, N> {
             })
             .collect::<postcard::Result<Vec<WriteFuture, N>>>()?;
 
-        Ok(PubFuture {
-            futures: unsafe { collect_futures.into_array().unwrap_unchecked() },
-            rng: Rng::with_seed(N as u64),
-        })
+        Ok(embassy_futures::join::join_array(unsafe { collect_futures.into_array().unwrap_unchecked() }))
     }
 
     pub fn wait_packet(&mut self) -> WaitPacketFuture<'_, 'l, N> {
@@ -120,7 +118,7 @@ impl<'l, const N: usize> Node<'l, N> {
                     // how to handle cases where publish_except hangs?
                     // in the future when we have QoS contracts, we'd ideally want to be able to
                     // cancel publish_except if it takes too long and carry on with processing packets.
-                    futures_lite::future::zip(
+                    embassy_futures::join::join(
                         (callback)(message),
                         self.publish_except(message, &[idx]).unwrap(),
                     )
@@ -134,33 +132,6 @@ impl<'l, const N: usize> Node<'l, N> {
 // This should be optimized out, hopefully.
 fn indices<const N: usize>() -> [usize; N] {
     (0..N).collect::<Vec<usize, N>>().into_array().unwrap()
-}
-
-pub struct PubFuture<'n, 'l, const N: usize> {
-    futures: [WriteFuture<'n, 'l>; N],
-    rng: Rng,
-}
-
-impl<const N: usize> Future for PubFuture<'_, '_, N> {
-    type Output = bool;
-
-    fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
-        let this = self.get_mut();
-
-        let mut done = Some(true);
-
-        let mut indices = indices::<N>();
-        this.rng.shuffle(&mut indices);
-
-        for idx in indices {
-            if let Poll::Ready(success) = Pin::new(&mut this.futures[idx]).poll(cx) {
-                done = done.map(|s| s && success);
-                break;
-            }
-        }
-
-        done.map_or(Poll::Pending, Poll::Ready)
-    }
 }
 
 pub struct WaitPacketFuture<'n, 'l, const N: usize> {
