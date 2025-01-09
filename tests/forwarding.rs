@@ -91,7 +91,7 @@ async fn test_forwarding() {
 
     tokio::task::spawn(async move {
         let mut node_2 = hermes::Node::new_with_links(6, [&mut link_2, &mut link_3]);
-        node_2.run(|_| async {}, AtomicBool::new(false)).await;
+        node_2.run(|_, _| async {}, AtomicBool::new(false)).await;
     });
 
     node_1.publish(message).unwrap().await;

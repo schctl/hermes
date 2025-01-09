@@ -1,4 +1,5 @@
 use core::future::Future;
+use core::mem::MaybeUninit;
 use core::pin::Pin;
 use core::sync::atomic::{AtomicBool, Ordering};
 use core::task::{Context, Poll};
@@ -32,7 +33,7 @@ impl From<Option<u16>> for Id {
     }
 }
 
-pub struct Node<'l, const N: usize> {
+pub struct Node<'l, const N: usize, const Q: usize = 8> {
     id: Id,
     links: [LinkedNode<'l>; N],
 }
@@ -48,8 +49,26 @@ impl<'l, const N: usize> Node<'l, N> {
         Self::new(id, links.map(LinkedNode::new))
     }
 
-    pub fn publish(&mut self, message: topic::Message) -> postcard::Result<JoinArray<WriteFuture<'_, 'l>, N>> {
+    pub fn publish(
+        &mut self,
+        message: topic::Message,
+    ) -> postcard::Result<JoinArray<WriteFuture<'_, 'l>, N>> {
         self.publish_except(message, &[])
+    }
+
+    pub fn publish_dummy(&mut self) -> postcard::Result<JoinArray<WriteFuture<'_, 'l>, N>> {
+        let futures: [WriteFuture<'_, 'l>; N] = {
+            let mut futures: [MaybeUninit<WriteFuture<'_, 'l>>; N] =
+                [const { MaybeUninit::uninit() }; N];
+
+            for fut in &mut futures {
+                fut.write(WriteFuture::dummy());
+            }
+
+            futures.map(|w| unsafe { core::mem::transmute(w) })
+        };
+
+        Ok(embassy_futures::join::join_array(futures))
     }
 
     pub fn publish_except(
@@ -77,7 +96,9 @@ impl<'l, const N: usize> Node<'l, N> {
             })
             .collect::<postcard::Result<Vec<WriteFuture, N>>>()?;
 
-        Ok(embassy_futures::join::join_array(unsafe { collect_futures.into_array().unwrap_unchecked() }))
+        Ok(embassy_futures::join::join_array(unsafe {
+            collect_futures.into_array().unwrap_unchecked()
+        }))
     }
 
     pub fn wait_packet(&mut self) -> WaitPacketFuture<'_, 'l, N> {
@@ -95,12 +116,14 @@ impl<'l, const N: usize> Node<'l, N> {
 
     pub async fn run<T>(
         &mut self,
-        mut callback: impl FnMut(topic::Message) -> T,
+        mut callback: impl FnMut(topic::Message, &mut Vec<topic::Message, 8>) -> T,
         cancel: AtomicBool,
     ) where
         T: Future<Output = ()>,
     {
         loop {
+            let mut message_queue: Vec<topic::Message, 8> = Vec::new();
+
             if cancel.load(Ordering::Relaxed) {
                 return;
             }
@@ -119,10 +142,16 @@ impl<'l, const N: usize> Node<'l, N> {
                     // in the future when we have QoS contracts, we'd ideally want to be able to
                     // cancel publish_except if it takes too long and carry on with processing packets.
                     embassy_futures::join::join(
-                        (callback)(message),
+                        (callback)(message, &mut message_queue),
                         self.publish_except(message, &[idx]).unwrap(),
                     )
                     .await;
+                }
+            }
+
+            for message in message_queue {
+                if let Ok(tok) = self.publish(message) {
+                    tok.await;
                 }
             }
         }

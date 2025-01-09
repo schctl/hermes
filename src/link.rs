@@ -1,5 +1,6 @@
 use core::cmp::min;
 use core::future::Future;
+use core::mem::MaybeUninit;
 use core::pin::Pin;
 use core::task::{Context, Poll};
 
@@ -186,11 +187,12 @@ impl<'l> LinkedNode<'l> {
             node: self,
             buffer,
             written: 0,
+            _u: false,
         })
     }
 
     pub fn dummy_write(&mut self) -> postcard::Result<WriteFuture<'_, 'l>> {
-        Ok(WriteFuture::dummy(self))
+        Ok(WriteFuture::dummy())
     }
 
     /// Fully block and read one packet into the netwwork.
@@ -234,14 +236,20 @@ pub struct WriteFuture<'n, 'l> {
     node: &'n mut LinkedNode<'l>,
     buffer: Vec<u8, 256>,
     written: usize,
+    // FIXME: forwarding tests fail without this?? I haven't the faintest idea why.
+    _u: bool,
 }
 
 impl<'n, 'l> WriteFuture<'n, 'l> {
-    pub(crate) fn dummy(node: &'n mut LinkedNode<'l>) -> Self {
+    #[allow(invalid_value)]
+    #[allow(clippy::uninit_assumed_init)]
+    pub(crate) fn dummy() -> Self {
         Self {
-            node,
+            // SAFETY: we should never make use of this value.
+            node: unsafe { MaybeUninit::uninit().assume_init() },
             buffer: Vec::new(),
             written: 0,
+            _u: true,
         }
     }
 }
