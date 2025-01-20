@@ -76,27 +76,31 @@ async fn test_tokio_channel() {
 
 #[tokio::test]
 async fn test_forwarding() {
-    let message = hermes::Message {
-        id: 0,
-        data: b"Hello, world!",
-    };
+    let local = tokio::task::LocalSet::new();
 
-    let (mut link_1, mut link_2) = ChannelLink::new();
-    let (mut link_3, mut link_4) = ChannelLink::new();
-
-    // here, node_1 and node_3 have no direct link to each other
-    // we expect node_2 to forward messages appropriately
-    let mut node_1 = hermes::Node::new_with_links(5, [&mut link_1]);
-    let mut node_3 = hermes::Node::new_with_links(6, [&mut link_4]);
-
-    tokio::task::spawn(async move {
-        let mut node_2 = hermes::Node::new_with_links(6, [&mut link_2, &mut link_3]);
-        node_2.run(|_, _| async {}, AtomicBool::new(false)).await;
-    });
-
-    node_1.publish(message).unwrap().await;
-    assert_eq!(
-        node_3.wait_packet().await.1.message,
-        hermes::packet::Message::Publish(message)
-    );
+    local.run_until(async move {
+        let message = hermes::Message {
+            id: 0,
+            data: b"Hello, world!",
+        };
+    
+        let (mut link_1, mut link_2) = ChannelLink::new();
+        let (mut link_3, mut link_4) = ChannelLink::new();
+    
+        // here, node_1 and node_3 have no direct link to each other
+        // we expect node_2 to forward messages appropriately
+        let mut node_1 = hermes::Node::new_with_links(5, [&mut link_1]);
+        let mut node_3 = hermes::Node::new_with_links(6, [&mut link_4]);
+    
+        tokio::task::spawn_local(async move {
+            let mut node_2 = hermes::Node::new_with_links(6, [&mut link_2, &mut link_3]);
+            node_2.run(|_, _| async {}, AtomicBool::new(false)).await;
+        });
+    
+        node_1.publish(message).unwrap().await;
+        assert_eq!(
+            node_3.wait_packet().await.1.message,
+            hermes::packet::Message::Publish(message)
+        );
+    }).await;
 }

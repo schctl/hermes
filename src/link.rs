@@ -10,7 +10,7 @@ use postcard::accumulator::{CobsAccumulator, FeedResult};
 
 use crate::packet::Packet;
 
-pub trait Link: Send {
+pub trait Link {
     /// Read as many bytes as possible into `buf`.
     ///
     /// If no bytes are available, `nb::WouldBlock` is returned.
