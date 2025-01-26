@@ -62,7 +62,7 @@ impl<'l, const N: usize> Node<'l, N> {
                 [const { MaybeUninit::uninit() }; N];
 
             for fut in &mut futures {
-                fut.write(WriteFuture::dummy());
+                fut.write(unsafe { WriteFuture::dummy_unsafe() });
             }
 
             futures.map(|w| unsafe { core::mem::transmute(w) })
@@ -117,7 +117,7 @@ impl<'l, const N: usize> Node<'l, N> {
     pub async fn run<T>(
         &mut self,
         mut callback: impl FnMut(topic::Message, &mut Vec<topic::Message, 8>) -> T,
-        cancel: AtomicBool,
+        cancel: &AtomicBool,
     ) where
         T: Future<Output = ()>,
     {
@@ -129,6 +129,7 @@ impl<'l, const N: usize> Node<'l, N> {
             }
 
             let (idx, packet) = self.wait_packet().await;
+
             match packet.message {
                 packet::Message::Publish(message) => {
                     let data_clone = Vec::<_, 256>::from_slice(message.data).unwrap();

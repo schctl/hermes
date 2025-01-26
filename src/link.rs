@@ -190,12 +190,11 @@ impl<'l> LinkedNode<'l> {
             node: self,
             buffer,
             written: 0,
-            _u: false,
         })
     }
 
     pub fn dummy_write(&mut self) -> postcard::Result<WriteFuture<'_, 'l>> {
-        Ok(WriteFuture::dummy())
+        Ok(WriteFuture::dummy(self))
     }
 
     /// Fully block and read one packet into the netwwork.
@@ -239,20 +238,25 @@ pub struct WriteFuture<'n, 'l> {
     node: &'n mut LinkedNode<'l>,
     buffer: Vec<u8, 256>,
     written: usize,
-    // FIXME: forwarding tests fail without this?? I haven't the faintest idea why.
-    _u: bool,
 }
 
 impl<'n, 'l> WriteFuture<'n, 'l> {
     #[allow(invalid_value)]
     #[allow(clippy::uninit_assumed_init)]
-    pub(crate) fn dummy() -> Self {
+    pub(crate) unsafe fn dummy_unsafe() -> Self {
         Self {
             // SAFETY: we should never make use of this value.
             node: unsafe { MaybeUninit::uninit().assume_init() },
             buffer: Vec::new(),
             written: 0,
-            _u: true,
+        }
+    }
+
+    pub(crate) fn dummy(node: &'n mut LinkedNode<'l>) -> Self {
+        Self {
+            node,
+            buffer: Vec::new(),
+            written: 0,
         }
     }
 }
@@ -292,6 +296,7 @@ impl Future for WriteFuture<'_, '_> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use core::assert_eq;
 
     use crate::packet::tests::TEST_PACKETS;
     use crate::packet::Packet;
