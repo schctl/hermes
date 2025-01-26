@@ -4,6 +4,7 @@ use core::mem::MaybeUninit;
 use core::pin::Pin;
 use core::task::{Context, Poll};
 
+use defmt::*;
 use heapless::spsc::Queue;
 use heapless::Vec;
 use postcard::accumulator::{CobsAccumulator, FeedResult};
@@ -131,6 +132,8 @@ impl<'l> LinkedNode<'l> {
     }
 
     fn _read_packet_intl(&mut self) -> nb::Result<Packet, ()> {
+        debug!("\t Link Accumulator State: {}", self.accumulator);
+
         let ret = self.link.read(&mut self.look_ahead[self.look_ahead_idx..]);
 
         let bytes = match ret {

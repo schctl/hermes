@@ -9,7 +9,7 @@ heapless = "0.7"
 nb = "1"
 defmt = "0.3"
 
-postcard = { version = "1" }
+postcard = { version = "1", features = ["use-defmt"] }
 fastrand = { version = "2.3", default-features = false }
 
 embassy-futures = "0.1"
