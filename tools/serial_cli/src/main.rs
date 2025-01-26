@@ -1,11 +1,11 @@
 use std::io::ErrorKind;
+use std::sync::atomic::AtomicBool;
 
-use anyhow::bail;
 use clap::Parser;
 use hermes::link::Link;
 use hermes::{topic, Node};
 use tokio::io::{stdin, AsyncBufReadExt, BufReader, Stdin};
-use tokio_serial::{SerialPort, SerialStream};
+use tokio_serial::SerialStream;
 
 #[derive(Parser, Debug)]
 #[command(version, about, long_about = None)]
@@ -40,7 +40,7 @@ impl Link for PortWrap {
             Err(e) => match e.kind() {
                 ErrorKind::WouldBlock => Err(nb::Error::WouldBlock),
                 _ => Err(nb::Error::Other(())),
-            }
+            },
         }
     }
 
@@ -50,7 +50,7 @@ impl Link for PortWrap {
             Err(e) => match e.kind() {
                 ErrorKind::WouldBlock => Err(nb::Error::WouldBlock),
                 _ => Err(nb::Error::Other(())),
-            }
+            },
         }
     }
 }
@@ -71,11 +71,25 @@ async fn run(opts: Opts) -> anyhow::Result<()> {
             node.publish(topic::Message {
                 id: 1,
                 data: line.as_bytes(),
-            })?.await;
+            })?
+            .await;
+
+            line.clear();
+
+            let exit = AtomicBool::new(false);
+
+            node.run(
+                |message, queue| {
+                    let data = core::str::from_utf8(message.data).unwrap();
+                    println!("recv -> {}", data);
+                    exit.store(true, std::sync::atomic::Ordering::Relaxed);
+                    async {}
+                },
+                &exit,
+            )
+            .await;
         }
     }
-
-    Ok(())
 }
 
 #[tokio::main]
