@@ -1,0 +1,14 @@
+[package]
+name = "hermes_serial_cli"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+hermes = { path = "../../" }
+
+anyhow = "1"
+clap = { version = "4", features = ["derive"] }
+tokio = { version = "1", features = ["full"] }
+tokio-serial = "5"
+
+nb = "1"
