@@ -1,0 +1,11 @@
+[package]
+name = "hermes_link_embassy_rb"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+hermes = { path = "../../" }
+
+embassy-sync = "0.6"
+nb = "1"
+ringbuffer = "0.15"

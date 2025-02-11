@@ -1,5 +1,6 @@
 [workspace]
 members = [
+    "impls/embassy_rb",
     "tools/serial_cli",
 ]
 
