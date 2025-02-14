@@ -1,6 +1,9 @@
 [workspace]
 members = [
-    "impls/embassy_rb", "impls/embassy_usb",
+    "impls/embassy_rb",
+    "impls/embassy_usb",
+    "impls/embassy_eio",
+
     "tools/serial_cli",
 ]
 

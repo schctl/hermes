@@ -4,7 +4,7 @@ version = "0.1.0"
 edition = "2021"
 
 [dependencies]
-hermes = { path = "../../" }
-hermes_link_embassy_rb = { path = "../embassy_rb" }
-
+embedded-io-async = "0.6"
 embassy-usb = "0.4"
+
+derive_more = { version = "2", default-features = false, features = ["from", "deref", "deref_mut"] }

@@ -5,6 +5,7 @@ use clap::Parser;
 use hermes::link::Link;
 use hermes::{topic, Node};
 use tokio::io::{stdin, AsyncBufReadExt, BufReader, Stdin};
+use tokio::time::Instant;
 use tokio_serial::SerialStream;
 
 #[derive(Parser, Debug)]
@@ -66,7 +67,7 @@ async fn run(opts: Opts) -> anyhow::Result<()> {
 
     loop {
         if let Ok(_) = stdin.read_line(&mut line).await {
-            print!("{line}");
+            let now = Instant::now();
 
             node.publish(topic::Message {
                 id: 1,
@@ -81,7 +82,7 @@ async fn run(opts: Opts) -> anyhow::Result<()> {
             node.run(
                 |message, queue| {
                     let data = core::str::from_utf8(message.data).unwrap();
-                    println!("recv -> {}", data);
+                    println!("Received [rtt {}us] -> {}", now.elapsed().as_micros(), data);
                     exit.store(true, std::sync::atomic::Ordering::Relaxed);
                     async {}
                 },

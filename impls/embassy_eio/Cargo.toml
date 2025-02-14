@@ -1,0 +1,10 @@
+[package]
+name = "hermes_link_embassy_eio"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+hermes = { path = "../../" }
+hermes_link_embassy_rb = { path = "../embassy_rb" }
+
+embedded-io-async = "0.6"
